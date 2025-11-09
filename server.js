@@ -1,4 +1,4 @@
-// ColeActivos – Backend 100% operativo (Render, Puppeteer con Chrome local)
+// ColeActivos – Backend 100% funcional en Render (Puppeteer + Chrome local)
 
 import express from "express";
 import cors from "cors";
@@ -11,25 +11,22 @@ app.use(cors());
 
 app.get("/", (_req, res) => res.send("✅ ColeActivos backend operativo (Render fixed)"));
 
-async function resolveLocalChrome() {
-  // Busca dentro del proyecto (Build Command descarga Chrome en ./chromium)
+async function findLocalChrome() {
   const base = path.join(process.cwd(), "chromium");
   try {
     const dirs = await fs.promises.readdir(base, { withFileTypes: true });
     for (const d of dirs) {
       if (d.isDirectory() && d.name.startsWith("linux-")) {
-        const candidate = path.join(base, d.name, "chrome-linux64", "chrome");
+        const file = path.join(base, d.name, "chrome-linux64", "chrome");
         try {
-          await fs.promises.access(candidate, fs.constants.X_OK);
-          console.log("Usando Chrome:", candidate);
-          return candidate;
+          await fs.promises.access(file, fs.constants.X_OK);
+          console.log("Usando Chrome local:", file);
+          return file;
         } catch {}
       }
     }
-  } catch (e) {
-    console.error("No se pudo acceder a ./chromium", e);
-  }
-  return await puppeteer.executablePath();
+  } catch {}
+  return puppeteer.executablePath();
 }
 
 app.get("/api/verificar-patente", async (req, res) => {
@@ -41,9 +38,7 @@ app.get("/api/verificar-patente", async (req, res) => {
   const t0 = Date.now();
 
   try {
-    const executablePath = await resolveLocalChrome();
-    if (!executablePath)
-      return res.json({ ok: false, tipo: "error", detalle: "Chrome no encontrado localmente" });
+    const executablePath = await findLocalChrome();
 
     browser = await puppeteer.launch({
       headless: "new",
@@ -59,28 +54,30 @@ app.get("/api/verificar-patente", async (req, res) => {
     });
 
     const page = await browser.newPage();
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-    );
-    await page.goto("https://apps.mtt.cl/consultaweb", { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.goto("https://apps.mtt.cl/consultaweb", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000
+    });
 
-    await page.type('input[type="text"]', patente, { delay: 50 });
+    await page.type('input[type="text"]', patente);
     await page.keyboard.press("Enter");
 
-    await page.waitForFunction(() => {
-      const t = document.body.innerText.toLowerCase();
-      return t.includes("tipo de servicio") || t.includes("no existen resultados");
-    }, { timeout: 60000 });
+    await page.waitForFunction(
+      () => {
+        const t = document.body.innerText.toLowerCase();
+        return t.includes("tipo de servicio") || t.includes("no existen resultados");
+      },
+      { timeout: 60000 }
+    );
 
     const txt = await page.evaluate(() => document.body.innerText.toLowerCase());
-    const esColectivo = txt.includes("tipo de servicio") && txt.includes("colectivo");
+    const esColectivo = txt.includes("colectivo");
     const noEncontrado = txt.includes("no existen resultados");
 
     let tipo = "otro";
     if (esColectivo) tipo = "colectivo";
     else if (noEncontrado) tipo = "no-encontrado";
     else if (txt.includes("taxi")) tipo = "taxi";
-    else if (txt.includes("bus")) tipo = "bus";
 
     res.json({ ok: esColectivo, tipo, patente, ms: Date.now() - t0 });
   } catch (err) {
