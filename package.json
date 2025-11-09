@@ -2,14 +2,18 @@
   "name": "coleactivos-backend",
   "version": "1.0.0",
   "description": "Verificador de patentes MTT para ColeActivos",
-  "main": "server.js",
   "type": "module",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^128.0.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "puppeteer": "^22.12.1"
+    "puppeteer-core": "^22.12.1"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
