@@ -1,0 +1,17 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+.env
+.cache/
+.pnpm-debug.log
+package-lock.json
+
+# Puppeteer / Chrome
+.chromium
+/opt/render/project/.cache/puppeteer
+
+# Otros
+.DS_Store
