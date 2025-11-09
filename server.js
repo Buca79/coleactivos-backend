@@ -1,4 +1,4 @@
-// ColeActivos – Verificador de Patentes (versión mejorada para casos dinámicos MTT)
+// ColeActivos – Backend 100% operativo (Render, Puppeteer con Chrome local)
 
 import express from "express";
 import cors from "cors";
@@ -9,14 +9,11 @@ import path from "path";
 const app = express();
 app.use(cors());
 
-app.get("/", (_req, res) => res.send("✅ ColeActivos backend operativo"));
+app.get("/", (_req, res) => res.send("✅ ColeActivos backend operativo (Render fixed)"));
 
-async function resolveChromePath() {
-  try {
-    const p = await puppeteer.executablePath();
-    if (p) return p;
-  } catch {}
-  const base = (process.env.PUPPETEER_CACHE_DIR || "/opt/render/.cache/puppeteer") + "/chrome";
+async function resolveLocalChrome() {
+  // Busca dentro del proyecto (Build Command descarga Chrome en ./chromium)
+  const base = path.join(process.cwd(), "chromium");
   try {
     const dirs = await fs.promises.readdir(base, { withFileTypes: true });
     for (const d of dirs) {
@@ -24,12 +21,15 @@ async function resolveChromePath() {
         const candidate = path.join(base, d.name, "chrome-linux64", "chrome");
         try {
           await fs.promises.access(candidate, fs.constants.X_OK);
+          console.log("Usando Chrome:", candidate);
           return candidate;
         } catch {}
       }
     }
-  } catch {}
-  return null;
+  } catch (e) {
+    console.error("No se pudo acceder a ./chromium", e);
+  }
+  return await puppeteer.executablePath();
 }
 
 app.get("/api/verificar-patente", async (req, res) => {
@@ -37,13 +37,13 @@ app.get("/api/verificar-patente", async (req, res) => {
   if (!/^[A-Z0-9]{5,8}$/.test(patente))
     return res.json({ ok: false, tipo: "invalida", patente });
 
-  const t0 = Date.now();
   let browser;
+  const t0 = Date.now();
 
   try {
-    const executablePath = await resolveChromePath();
+    const executablePath = await resolveLocalChrome();
     if (!executablePath)
-      return res.json({ ok: false, tipo: "error", detalle: "Chrome no encontrado" });
+      return res.json({ ok: false, tipo: "error", detalle: "Chrome no encontrado localmente" });
 
     browser = await puppeteer.launch({
       headless: "new",
@@ -59,37 +59,30 @@ app.get("/api/verificar-patente", async (req, res) => {
     });
 
     const page = await browser.newPage();
-    await page.goto("https://apps.mtt.cl/consultaweb", { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+    );
+    await page.goto("https://apps.mtt.cl/consultaweb", { waitUntil: "domcontentloaded", timeout: 60000 });
+
     await page.type('input[type="text"]', patente, { delay: 50 });
     await page.keyboard.press("Enter");
 
-    // Esperar explícitamente a que aparezca “Tipo de Servicio” o “no existen resultados”
     await page.waitForFunction(() => {
       const t = document.body.innerText.toLowerCase();
-      return t.includes("tipo de servicio") || t.includes("no existen resultados") || t.includes("vehículo");
+      return t.includes("tipo de servicio") || t.includes("no existen resultados");
     }, { timeout: 60000 });
 
-    // Esperar un poco más para permitir que cargue completamente
-    await page.waitForTimeout(2000);
-
-    const text = await page.evaluate(() => document.body.innerText);
-    const low = text.toLowerCase();
+    const txt = await page.evaluate(() => document.body.innerText.toLowerCase());
+    const esColectivo = txt.includes("tipo de servicio") && txt.includes("colectivo");
+    const noEncontrado = txt.includes("no existen resultados");
 
     let tipo = "otro";
-    let ok = false;
+    if (esColectivo) tipo = "colectivo";
+    else if (noEncontrado) tipo = "no-encontrado";
+    else if (txt.includes("taxi")) tipo = "taxi";
+    else if (txt.includes("bus")) tipo = "bus";
 
-    if (low.includes("tipo de servicio") && low.includes("colectivo")) {
-      tipo = "colectivo";
-      ok = true;
-    } else if (low.includes("no existen resultados")) {
-      tipo = "no-encontrado";
-    } else if (low.includes("taxi")) {
-      tipo = "taxi";
-    } else if (low.includes("bus")) {
-      tipo = "bus";
-    }
-
-    res.json({ ok, tipo, patente, ms: Date.now() - t0 });
+    res.json({ ok: esColectivo, tipo, patente, ms: Date.now() - t0 });
   } catch (err) {
     res.json({ ok: false, tipo: "error", detalle: String(err), ms: Date.now() - t0 });
   } finally {
