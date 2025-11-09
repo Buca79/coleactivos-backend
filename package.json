@@ -2,7 +2,7 @@
   "name": "coleactivos-backend",
   "version": "1.0.0",
   "type": "module",
-  "description": "Verificador de patentes para taxis/colectivos con Puppeteer",
+  "description": "Verificador de patentes para taxis/colectivos",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
