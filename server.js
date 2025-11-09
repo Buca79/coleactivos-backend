@@ -1,8 +1,4 @@
-// ColeActivos – Verificador de Patentes (Render + Puppeteer correcto)
-// Busca “colectivo” específicamente en el “Tipo de Servicio” del MTT.
-// Endpoints:
-//   GET /                 -> ping
-//   GET /api/verificar-patente?patente=XXXXXX  -> { ok, tipo, patente, ms, detalle? }
+// ColeActivos – Verificador de Patentes (versión mejorada para casos dinámicos MTT)
 
 import express from "express";
 import cors from "cors";
@@ -15,16 +11,12 @@ app.use(cors());
 
 app.get("/", (_req, res) => res.send("✅ ColeActivos backend operativo"));
 
-/* ---------- helpers ---------- */
-
-// Intenta ubicar el Chrome instalado por `npx puppeteer browsers install chrome`
 async function resolveChromePath() {
   try {
-    const p = await puppeteer.executablePath(); // v22+ devuelve el bin si está instalado
+    const p = await puppeteer.executablePath();
     if (p) return p;
   } catch {}
-  const cacheDir = process.env.PUPPETEER_CACHE_DIR || "/opt/render/.cache/puppeteer";
-  const base = path.join(cacheDir, "chrome");
+  const base = (process.env.PUPPETEER_CACHE_DIR || "/opt/render/.cache/puppeteer") + "/chrome";
   try {
     const dirs = await fs.promises.readdir(base, { withFileTypes: true });
     for (const d of dirs) {
@@ -40,30 +32,18 @@ async function resolveChromePath() {
   return null;
 }
 
-function normalizaPatente(x = "") {
-  return x.toString().trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
-/* ---------- API ---------- */
-
 app.get("/api/verificar-patente", async (req, res) => {
-  const raw = normalizaPatente(req.query.patente);
-  if (!/^[A-Z0-9]{5,8}$/.test(raw)) {
-    return res.json({ ok: false, tipo: "invalida", patente: raw });
-  }
+  const patente = (req.query.patente || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!/^[A-Z0-9]{5,8}$/.test(patente))
+    return res.json({ ok: false, tipo: "invalida", patente });
 
   const t0 = Date.now();
   let browser;
 
   try {
     const executablePath = await resolveChromePath();
-    if (!executablePath) {
-      return res.json({
-        ok: false,
-        tipo: "error",
-        detalle: "Chrome no encontrado. Verifica Build Command y PUPPETEER_CACHE_DIR."
-      });
-    }
+    if (!executablePath)
+      return res.json({ ok: false, tipo: "error", detalle: "Chrome no encontrado" });
 
     browser = await puppeteer.launch({
       headless: "new",
@@ -79,59 +59,43 @@ app.get("/api/verificar-patente", async (req, res) => {
     });
 
     const page = await browser.newPage();
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-    );
-    await page.setExtraHTTPHeaders({ "Accept-Language": "es-CL,es;q=0.9" });
+    await page.goto("https://apps.mtt.cl/consultaweb", { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.type('input[type="text"]', patente, { delay: 50 });
+    await page.keyboard.press("Enter");
 
-    // 1) Ir a la página principal
-    await page.goto("https://apps.mtt.cl/consultaweb", {
-      waitUntil: "domcontentloaded",
-      timeout: 60000
-    });
-
-    // 2) Escribir la patente en el primer input de texto visible
-    await page.waitForSelector('input[type="text"]', { timeout: 15000 });
-    await page.focus('input[type="text"]');
-    await page.keyboard.type(raw, { delay: 50 });
-
-    // 3) Enviar: click en botón Buscar si existe, si no Enter
-    const clicked = await page.$$eval(
-      'input[type="submit"],button[type="submit"],input[value*="Buscar"],button:has-text("Buscar")',
-      els => {
-        const b = els.find(e => e && e.offsetParent !== null);
-        if (b) { b.click(); return true; }
-        return false;
-      }
-    );
-    if (!clicked) await page.keyboard.press("Enter");
-
-    // 4) Esperar a que aparezca contenido útil
+    // Esperar explícitamente a que aparezca “Tipo de Servicio” o “no existen resultados”
     await page.waitForFunction(() => {
       const t = document.body.innerText.toLowerCase();
-      return t.includes("tipo de servicio") || t.includes("no existen resultados") || t.length > 4000;
-    }, { timeout: 30000 }).catch(() => {});
+      return t.includes("tipo de servicio") || t.includes("no existen resultados") || t.includes("vehículo");
+    }, { timeout: 60000 });
 
-    // 5) Analizar sólo por "Tipo de Servicio"
-    const txt = await page.evaluate(() => document.body.innerText.toLowerCase());
+    // Esperar un poco más para permitir que cargue completamente
+    await page.waitForTimeout(2000);
 
-    const esColectivo = txt.includes("tipo de servicio") && txt.includes("colectivo");
-    const noEncontrado = txt.includes("no existen resultados") || txt.includes("no se encontraron");
+    const text = await page.evaluate(() => document.body.innerText);
+    const low = text.toLowerCase();
 
     let tipo = "otro";
-    if (esColectivo) tipo = "colectivo";
-    else if (noEncontrado) tipo = "no-encontrado";
-    else if (txt.includes("taxi")) tipo = "taxi";
-    else if (txt.includes("bus")) tipo = "bus";
+    let ok = false;
 
-    return res.json({ ok: esColectivo, tipo, patente: raw, ms: Date.now() - t0 });
+    if (low.includes("tipo de servicio") && low.includes("colectivo")) {
+      tipo = "colectivo";
+      ok = true;
+    } else if (low.includes("no existen resultados")) {
+      tipo = "no-encontrado";
+    } else if (low.includes("taxi")) {
+      tipo = "taxi";
+    } else if (low.includes("bus")) {
+      tipo = "bus";
+    }
+
+    res.json({ ok, tipo, patente, ms: Date.now() - t0 });
   } catch (err) {
-    return res.json({ ok: false, tipo: "error", detalle: String(err), ms: Date.now() - t0 });
+    res.json({ ok: false, tipo: "error", detalle: String(err), ms: Date.now() - t0 });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
 });
 
-/* ---------- servidor ---------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor activo en puerto ${PORT}`));
