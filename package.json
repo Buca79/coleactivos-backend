@@ -1,19 +1,16 @@
 {
   "name": "coleactivos-backend",
   "version": "1.0.0",
-  "description": "Verificador de patentes MTT para ColeActivos",
   "type": "module",
+  "description": "Verificador de patentes para taxis/colectivos con Puppeteer",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
-    "@sparticuz/chromium": "^128.0.0",
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "puppeteer-core": "^22.12.1"
-  },
-  "engines": {
-    "node": ">=18"
+    "express": "^4.18.2",
+    "puppeteer": "^21.3.8"
   }
 }
